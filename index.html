@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-4 max-w-4xl">
+        <h1 class="text-3xl font-bold text-center mb-6">WhatsApp Bot</h1>
+        
+        <!-- QR Code Section -->
+        <div id="qr-section" class="hidden bg-white p-6 rounded-lg shadow-md mb-6 text-center">
+            <h2 class="text-xl font-semibold mb-4">Scan QR Code to Authenticate</h2>
+            <div id="qrcode" class="mx-auto w-64 h-64 bg-gray-200 flex items-center justify-center">
+                <p class="text-gray-500">Loading QR code...</p>
+            </div>
+            <img id="qr-fallback" class="hidden mx-auto w-64 h-64" alt="QR Code Fallback">
+            <p id="qr-error" class="text-red-500 hidden mt-2"></p>
+            <button id="refresh-qr" class="bg-yellow-500 text-white px-4 py-2 rounded hover:bg-yellow-600 mt-4">Refresh QR Code</button>
+        </div>
+        
+        <!-- Main Controls -->
+        <div id="controls" class="bg-white p-6 rounded-lg shadow-md mb-6 hidden">
+            <div class="flex justify-between items-center">
+                <button id="show-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Show Chats</button>
+                <button id="exit" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Exit</button>
+            </div>
+        </div>
+        
+        <!-- Chat List -->
+        <div id="chat-list" class="hidden bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Select a Chat</h2>
+            <ul id="chats" class="space-y-2 max-h-64 overflow-y-auto"></ul>
+        </div>
+        
+        <!-- Date Filter -->
+        <div id="date-filter" class="hidden bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Select Date Filter</h2>
+            <div class="flex flex-col space-y-4">
+                <select id="date-filter-type" class="border rounded px-2 py-1">
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="custom">Custom Date Range</option>
+                </select>
+                <div id="custom-date" class="hidden flex space-x-4">
+                    <input id="start-date" type="text" placeholder="dd/mm/yy" class="border rounded px-2 py-1" pattern="\d{2}/\d{2}/\d{2}">
+                    <input id="end-date" type="text" placeholder="dd/mm/yy" class="border rounded px-2 py-1" pattern="\d{2}/\d{2}/\d{2}">
+                </div>
+                <div class="flex space-x-2">
+                    <button id="apply-filter" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Apply Filter</button>
+                    <button id="cancel-filter" class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Cancel</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Messages -->
+        <div id="messages" class="hidden bg-white p-6 rounded-lg shadow-md">
+            <h2 class="text-xl font-semibold mb-4">Messages</h2>
+            <div id="message-list" class="space-y-4 max-h-96 overflow-y-auto"></div>
+            <button id="back-to-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mt-4">Back to Chats</button>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let selectedChatId = null;
+        let chats = [];
+        let currentPolicies = [];
+        let isAuthenticated = false;
+
+        // Initialize WebSocket for QR code delivery only
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                console.log('WebSocket already open, skipping connection');
+                return;
+            }
+            ws = new WebSocket('ws://localhost:8080');
+            
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+            };
+
+            ws.onmessage = (event) => {
+                console.log('WebSocket message received:', event.data);
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'qr') {
+                        showQrCode(data.data);
+                    } else if (data.type === 'authenticated' || data.type === 'close') {
+                        isAuthenticated = true;
+                        hideQrCode();
+                        closeWebSocket();
+                        showControls(); // Show controls directly
+                        console.log('Authenticated, WebSocket closed, controls shown');
+                    } else if (data.type === 'waiting') {
+                        showQrError('Waiting for QR code or session to initialize...');
+                        document.getElementById('qr-section').classList.remove('hidden');
+                    } else if (data.type === 'error') {
+                        showQrError(data.data);
+                    } else if (data.type === 'disconnected') {
+                        isAuthenticated = false;
+                        showQrError('Session disconnected. Please scan QR code again.');
+                        document.getElementById('qr-section').classList.remove('hidden');
+                        document.getElementById('controls').classList.add('hidden');
+                        document.getElementById('messages').classList.add('hidden');
+                        document.getElementById('date-filter').classList.add('hidden');
+                        document.getElementById('chat-list').classList.add('hidden');
+                    }
+                } catch (error) {
+                    console.error('Error parsing WebSocket message:', error);
+                    showQrError('Invalid message received from server.');
+                }
+            };
+
+            ws.onclose = (event) => {
+                console.log('WebSocket closed:', { code: event.code, reason: event.reason });
+                ws = null;
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                showQrError('WebSocket connection error.');
+            };
+        }
+
+        // Close WebSocket
+        function closeWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.close();
+                console.log('WebSocket closed');
+            }
+            ws = null;
+        }
+
+        // Check session status (single attempt, only on load or refresh)
+        async function checkSession() {
+            if (isAuthenticated) {
+                console.log('Already authenticated, skipping session check');
+                showControls();
+                return;
+            }
+            try {
+                console.log('Checking session');
+                const res = await fetch('http://localhost:3000/session');
+                const data = await res.json();
+                console.log('Session check response:', data);
+                if (res.ok && data.sessionExists) {
+                    isAuthenticated = true;
+                    showControls();
+                    closeWebSocket();
+                    console.log('Session confirmed, controls shown');
+                } else if (data.qrCodeDataExists) {
+                    document.getElementById('qr-section').classList.remove('hidden');
+                    connectWebSocket();
+                } else {
+                    showQrError('No session or QR code available. Please try restarting the server.');
+                    document.getElementById('qr-section').classList.remove('hidden');
+                    connectWebSocket();
+                }
+            } catch (error) {
+                console.error('Session check error:', error);
+                showQrError('Unable to check session. Please ensure the server is running.');
+                document.getElementById('qr-section').classList.remove('hidden');
+                connectWebSocket();
+            }
+        }
+
+        // Show controls
+        function showControls() {
+            document.getElementById('controls').classList.remove('hidden');
+            document.getElementById('qr-section').classList.add('hidden');
+            document.getElementById('chat-list').classList.add('hidden');
+            document.getElementById('date-filter').classList.add('hidden');
+            document.getElementById('messages').classList.add('hidden');
+            console.log('Controls displayed');
+        }
+
+        // Show QR code
+        function showQrCode(base64Qr) {
+            const qrContainer = document.getElementById('qrcode');
+            const qrFallback = document.getElementById('qr-fallback');
+            qrContainer.innerHTML = '';
+            qrFallback.classList.add('hidden');
+
+            if (base64Qr && base64Qr.startsWith('data:image/png;base64,')) {
+                try {
+                    new QRCode(qrContainer, {
+                        text: base64Qr,
+                        width: 256,
+                        height: 256
+                    });
+                    console.log('QR code rendered with QRCode.js');
+                    document.getElementById('qr-error').classList.add('hidden');
+                    document.getElementById('qr-section').classList.remove('hidden');
+                } catch (error) {
+                    console.error('QRCode.js error:', error);
+                    qrFallback.src = base64Qr;
+                    qrFallback.classList.remove('hidden');
+                    qrContainer.classList.add('hidden');
+                    console.log('QR code rendered with fallback img');
+                    document.getElementById('qr-error').classList.add('hidden');
+                    document.getElementById('qr-section').classList.remove('hidden');
+                }
+            } else {
+                console.error('Invalid QR code data:', base64Qr);
+                showQrError('Invalid QR code data received.');
+            }
+        }
+
+        // Show QR error
+        function showQrError(message) {
+            document.getElementById('qr-error').textContent = message;
+            document.getElementById('qr-error').classList.remove('hidden');
+            document.getElementById('qrcode').innerHTML = '<p class="text-gray-500">QR code unavailable</p>';
+            document.getElementById('qr-fallback').classList.add('hidden');
+            console.log('QR error:', message);
+        }
+
+        // Hide QR code
+        function hideQrCode() {
+            document.getElementById('qr-section').classList.add('hidden');
+            console.log('QR code hidden');
+        }
+
+        // Refresh QR code
+        document.getElementById('refresh-qr').addEventListener('click', async () => {
+            try {
+                console.log('Refreshing QR code');
+                const res = await fetch('http://localhost:3000/refresh-qr', { method: 'POST' });
+                const data = await res.json();
+                console.log('Refresh QR response:', data);
+                if (res.ok && !data.error) {
+                    isAuthenticated = false;
+                    showQrError('Waiting for new QR code...');
+                    connectWebSocket();
+                } else {
+                    showQrError(data.error || 'Failed to refresh QR code.');
+                }
+            } catch (error) {
+                console.error('Refresh QR error:', error);
+                showQrError('Failed to refresh QR code.');
+            }
+        });
+
+        // Fetch chats
+        async function fetchChats() {
+            try {
+                console.log('Fetching chats');
+                const res = await fetch('http://localhost:3000/chats');
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                chats = await res.json();
+                console.log('Chats fetched:', chats);
+                if (chats.error) throw new Error(chats.error);
+                const chatList = document.getElementById('chats');
+                chatList.innerHTML = '';
+                chats.forEach((chat, index) => {
+                    const li = document.createElement('li');
+                    li.className = `p-2 border rounded cursor-pointer hover:bg-gray-200 ${index === 0 ? 'bg-gray-200' : ''}`;
+                    li.dataset.id = chat.id;
+                    li.textContent = `(${chat.identifier}, ${chat.name})`;
+                    li.addEventListener('click', () => selectChat(chat.id));
+                    chatList.appendChild(li);
+                });
+                document.getElementById('chat-list').classList.remove('hidden');
+                document.getElementById('controls').classList.add('hidden');
+                setupArrowNavigation();
+                console.log('Chat list displayed');
+            } catch (error) {
+                console.error('Fetch chats error:', error);
+                alert('Failed to fetch chats. Please ensure the server is running.');
+            }
+        }
+
+        document.getElementById('show-chats').addEventListener('click', fetchChats);
+
+        // Arrow key navigation
+        function setupArrowNavigation() {
+            let selectedIndex = 0;
+            const items = document.querySelectorAll('#chats li');
+            if (items.length === 0) return;
+            items[selectedIndex].classList.add('bg-gray-200');
+
+            const handleKeydown = (e) => {
+                if (!document.getElementById('chat-list').classList.contains('hidden')) {
+                    if (e.key === 'ArrowDown' && selectedIndex < items.length - 1) {
+                        items[selectedIndex].classList.remove('bg-gray-200');
+                        selectedIndex++;
+                        items[selectedIndex].classList.add('bg-gray-200');
+                        items[selectedIndex].scrollIntoView({ block: 'nearest' });
+                    } else if (e.key === 'ArrowUp' && selectedIndex > 0) {
+                        items[selectedIndex].classList.remove('bg-gray-200');
+                        selectedIndex--;
+                        items[selectedIndex].classList.add('bg-gray-200');
+                        items[selectedIndex].scrollIntoView({ block: 'nearest' });
+                    } else if (e.key === 'Enter') {
+                        selectChat(items[selectedIndex].dataset.id);
+                    }
+                }
+            };
+            document.removeEventListener('keydown', handleKeydown);
+            document.addEventListener('keydown', handleKeydown);
+            console.log('Arrow navigation set up');
+        }
+
+        // Select chat
+        function selectChat(chatId) {
+            selectedChatId = chatId;
+            document.getElementById('chat-list').classList.add('hidden');
+            document.getElementById('date-filter').classList.remove('hidden');
+            console.log('Selected chat:', chatId);
+        }
+
+        // Save policy
+        async function savePolicy(policy) {
+            try {
+                console.log('Saving policy:', policy.number);
+                const res = await fetch('http://localhost:3000/save-policy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chatId: selectedChatId, policy })
+                });
+                const result = await res.json();
+                console.log('Save policy response:', { status: res.status, body: result });
+                if (res.ok && result.success) {
+                    alert(`Policy ${policy.number} saved successfully to ${result.folder}!`);
+                } else {
+                    console.error('Policy save failed:', result.error);
+                    alert(`Failed to save policy: ${result.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Save policy network error:', error);
+                alert('Failed to save policy due to network error. Please ensure the server is running.');
+            }
+        }
+
+        // Date filter type change
+        document.getElementById('date-filter-type').addEventListener('change', (e) => {
+            const customDate = document.getElementById('custom-date');
+            if (e.target.value === 'custom') {
+                customDate.classList.remove('hidden');
+            } else {
+                customDate.classList.add('hidden');
+            }
+            console.log('Date filter type changed:', e.target.value);
+        });
+
+        // Apply date filter
+        document.getElementById('apply-filter').addEventListener('click', async () => {
+            const dateFilter = document.getElementById('date-filter-type').value;
+            let startDate = '', endDate = '';
+            if (dateFilter === 'custom') {
+                startDate = document.getElementById('start-date').value;
+                endDate = document.getElementById('end-date').value;
+                if (!/^\d{2}\/\d{2}\/\d{2}$/.test(startDate) || !/^\d{2}\/\d{2}\/\d{2}$/.test(endDate)) {
+                    alert('Please enter dates in dd/mm/yy format');
+                    return;
+                }
+            }
+
+            try {
+                console.log('Applying filter:', { chatId: selectedChatId, dateFilter, startDate, endDate });
+                const res = await fetch('http://localhost:3000/messages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chatId: selectedChatId, dateFilter, startDate, endDate })
+                });
+                const { messages, policies } = await res.json();
+                console.log('Messages fetched:', { messages: messages.length, policies: policies.length });
+                if (messages.error) {
+                    alert(messages.error);
+                    return;
+                }
+
+                currentPolicies = policies;
+                const messageList = document.getElementById('message-list');
+                messageList.innerHTML = '';
+
+                policies.forEach(policy => {
+                    const policyDiv = document.createElement('div');
+                    policyDiv.className = 'border p-4 rounded-lg mb-4 bg-gray-50';
+                    policyDiv.innerHTML = `
+                        <h3 class="text-lg font-semibold mb-2">Policy #${policy.number}</h3>
+                        <ul class="space-y-2">
+                            ${policy.messages.map(msg => {
+                                if (msg.includes('Image') || msg.includes('Video') || msg.includes('Document')) {
+                                    const [, type, index, dateTime, fileName] = msg.match(/(\w+) (\d+) (.+?) ([\w.-]+)/) || [, type, index, dateTime, ''];
+                                    return `<li>[${dateTime}] <a href="/media/${policy.number}_${policy.dateStr}/${fileName || `${type.toLowerCase()}_${index}_${policy.dateStr}.${type.toLowerCase() === 'image' ? 'jpg' : type.toLowerCase() === 'video' ? 'mp4' : 'bin'}`}" class="text-blue-500 hover:underline" download>${type} ${index}</a></li>`;
+                                }
+                                return `<li>${msg.replace('\n', '<br>')}</li>`;
+                            }).join('')}
+                        </ul>
+                        <button class="save-policy bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 mt-2" data-policy='${JSON.stringify(policy)}'>Save Policy</button>
+                    `;
+                    messageList.appendChild(policyDiv);
+                });
+
+                document.querySelectorAll('.save-policy').forEach(button => {
+                    button.addEventListener('click', () => {
+                        const policy = JSON.parse(button.dataset.policy);
+                        savePolicy(policy);
+                    });
+                });
+
+                messages.forEach(msg => {
+                    if (!policies.some(p => p.messages.some(pm => pm.includes(msg.dateTime)))) {
+                        const div = document.createElement('div');
+                        div.className = 'p-2 border-b';
+                        div.innerHTML = `[${msg.dateTime}] Them: ${msg.body}`;
+                        messageList.appendChild(div);
+                    }
+                });
+
+                document.getElementById('date-filter').classList.add('hidden');
+                document.getElementById('messages').classList.remove('hidden');
+                console.log('Messages displayed');
+            } catch (error) {
+                console.error('Fetch messages error:', error);
+                alert('Failed to fetch messages. Please ensure the server is running.');
+            }
+        });
+
+        // Cancel date filter
+        document.getElementById('cancel-filter').addEventListener('click', () => {
+            document.getElementById('date-filter').classList.add('hidden');
+            document.getElementById('chat-list').classList.remove('hidden');
+            console.log('Date filter cancelled');
+        });
+
+        // Back to chats
+        document.getElementById('back-to-chats').addEventListener('click', () => {
+            document.getElementById('messages').classList.add('hidden');
+            document.getElementById('controls').classList.remove('hidden');
+            console.log('Returned to controls');
+        });
+
+        // Exit
+        document.getElementById('exit').addEventListener('click', async () => {
+            if (confirm('Are you sure you want to stop the server?')) {
+                try {
+                    console.log('Stopping server');
+                    await fetch('http://localhost:3000/stop', { method: 'POST' });
+                    alert('Server stopped');
+                } catch (error) {
+                    console.error('Stop server error:', error);
+                    alert('Failed to stop server.');
+                }
+            }
+        });
+
+        // Prevent unintended reloads
+        window.addEventListener('beforeunload', (event) => {
+            console.log('Page unload attempted');
+        });
+
+        // Initialize
+        console.log('Page loaded');
+        checkSession();
+    </script>
+</body>
+</html>
