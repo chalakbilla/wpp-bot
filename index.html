@@ -60,7 +60,10 @@
         <div id="messages" class="hidden bg-white p-6 rounded-lg shadow-md">
             <h2 class="text-xl font-semibold mb-4">Messages</h2>
             <div id="message-list" class="space-y-4 max-h-96 overflow-y-auto"></div>
-            <button id="back-to-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mt-4">Back to Chats</button>
+            <div class="flex space-x-2 mt-4">
+                <button id="save-all-policies" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Save All Policies</button>
+                <button id="back-to-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Back to Chats</button>
+            </div>
         </div>
     </div>
 
@@ -93,7 +96,7 @@
                         isAuthenticated = true;
                         hideQrCode();
                         closeWebSocket();
-                        showControls(); // Show controls directly
+                        showControls();
                         console.log('Authenticated, WebSocket closed, controls shown');
                     } else if (data.type === 'waiting') {
                         showQrError('Waiting for QR code or session to initialize...');
@@ -135,7 +138,7 @@
             ws = null;
         }
 
-        // Check session status (single attempt, only on load or refresh)
+        // Check session status
         async function checkSession() {
             if (isAuthenticated) {
                 console.log('Already authenticated, skipping session check');
@@ -325,15 +328,46 @@
                 const result = await res.json();
                 console.log('Save policy response:', { status: res.status, body: result });
                 if (res.ok && result.success) {
-                    alert(`Policy ${policy.number} saved successfully to ${result.folder}!`);
+                    return { success: true, message: `Policy ${policy.number} saved successfully to ${result.folder}!` };
                 } else {
                     console.error('Policy save failed:', result.error);
-                    alert(`Failed to save policy: ${result.error || 'Unknown error'}`);
+                    return { success: false, message: `Policy ${policy.number} failed to save: ${result.error || 'Unknown error'}` };
                 }
             } catch (error) {
                 console.error('Save policy network error:', error);
-                alert('Failed to save policy due to network error. Please ensure the server is running.');
+                return { success: false, message: `Policy ${policy.number} failed to save due to network error.` };
             }
+        }
+
+        // Save all policies
+        async function saveAllPolicies() {
+            if (currentPolicies.length === 0) {
+                alert('No policies to save.');
+                return;
+            }
+
+            const results = [];
+            for (const policy of currentPolicies) {
+                const result = await savePolicy(policy);
+                results.push(result);
+            }
+
+            const successMessages = results
+                .filter(r => r.success)
+                .map(r => r.message);
+            const failureMessages = results
+                .filter(r => !r.success)
+                .map(r => r.message);
+
+            let alertMessage = '';
+            if (successMessages.length > 0) {
+                alertMessage += 'Saved successfully:\n' + successMessages.join('\n') + '\n';
+            }
+            if (failureMessages.length > 0) {
+                alertMessage += 'Already present or failed to save:\n' + failureMessages.join('\n');
+            }
+
+            alert(alertMessage || 'No policies processed.');
         }
 
         // Date filter type change
@@ -400,7 +434,9 @@
                 document.querySelectorAll('.save-policy').forEach(button => {
                     button.addEventListener('click', () => {
                         const policy = JSON.parse(button.dataset.policy);
-                        savePolicy(policy);
+                        savePolicy(policy).then(result => {
+                            alert(result.message);
+                        });
                     });
                 });
 
@@ -428,6 +464,9 @@
             document.getElementById('chat-list').classList.remove('hidden');
             console.log('Date filter cancelled');
         });
+
+        // Save all policies button
+        document.getElementById('save-all-policies').addEventListener('click', saveAllPolicies);
 
         // Back to chats
         document.getElementById('back-to-chats').addEventListener('click', () => {
