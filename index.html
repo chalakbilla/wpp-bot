@@ -26,6 +26,7 @@
         <div id="controls" class="bg-white p-6 rounded-lg shadow-md mb-6 hidden">
             <div class="flex justify-between items-center">
                 <button id="show-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Show Chats</button>
+                <a href="SendEmail.html" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Send Saved Policies</a>
                 <button id="exit" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">Exit</button>
             </div>
         </div>
@@ -33,14 +34,21 @@
         <!-- Chat List -->
         <div id="chat-list" class="hidden bg-white p-6 rounded-lg shadow-md mb-6">
             <h2 class="text-xl font-semibold mb-4">Select a Chat</h2>
+            <div class="mb-4">
+                <button id="back-to-main-from-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Back to Main Page</button>
+            </div>
             <ul id="chats" class="space-y-2 max-h-64 overflow-y-auto"></ul>
         </div>
         
         <!-- Date Filter -->
         <div id="date-filter" class="hidden bg-white p-6 rounded-lg shadow-md mb-6">
             <h2 class="text-xl font-semibold mb-4">Select Date Filter</h2>
+            <div class="mb-4">
+                <button id="back-to-main-from-filter" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Back to Main Page</button>
+            </div>
             <div class="flex flex-col space-y-4">
                 <select id="date-filter-type" class="border rounded px-2 py-1">
+                    <option value="all">All Dates</option>
                     <option value="today">Today</option>
                     <option value="yesterday">Yesterday</option>
                     <option value="custom">Custom Date Range</option>
@@ -59,11 +67,11 @@
         <!-- Messages -->
         <div id="messages" class="hidden bg-white p-6 rounded-lg shadow-md">
             <h2 class="text-xl font-semibold mb-4">Messages</h2>
-            <div id="message-list" class="space-y-4 max-h-96 overflow-y-auto"></div>
-            <div class="flex space-x-2 mt-4">
-                <button id="save-all-policies" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Save All Policies</button>
-                <button id="back-to-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Back to Chats</button>
+            <div class="mb-4">
+                <button id="save-all-policies" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Save All</button>
             </div>
+            <div id="message-list" class="space-y-4 max-h-96 overflow-y-auto"></div>
+            <button id="back-to-chats" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 mt-4">Back to Chats</button>
         </div>
     </div>
 
@@ -277,7 +285,19 @@
             }
         }
 
-        document.getElementById('show-chats').addEventListener('click', fetchChats);
+        // Back to main from chats
+        document.getElementById('back-to-main-from-chats').addEventListener('click', () => {
+            document.getElementById('chat-list').classList.add('hidden');
+            showControls();
+            console.log('Returned to main from chats');
+        });
+
+        // Back to main from filter
+        document.getElementById('back-to-main-from-filter').addEventListener('click', () => {
+            document.getElementById('date-filter').classList.add('hidden');
+            showControls();
+            console.log('Returned to main from filter');
+        });
 
         // Arrow key navigation
         function setupArrowNavigation() {
@@ -316,58 +336,70 @@
             console.log('Selected chat:', chatId);
         }
 
-        // Save policy
-        async function savePolicy(policy) {
-            try {
-                console.log('Saving policy:', policy.number);
-                const res = await fetch('http://localhost:3000/save-policy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ chatId: selectedChatId, policy })
-                });
-                const result = await res.json();
-                console.log('Save policy response:', { status: res.status, body: result });
-                if (res.ok && result.success) {
-                    return { success: true, message: `Policy ${policy.number} saved successfully to ${result.folder}!` };
-                } else {
-                    console.error('Policy save failed:', result.error);
-                    return { success: false, message: `Policy ${policy.number} failed to save: ${result.error || 'Unknown error'}` };
-                }
-            } catch (error) {
-                console.error('Save policy network error:', error);
-                return { success: false, message: `Policy ${policy.number} failed to save due to network error.` };
-            }
-        }
-
-        // Save all policies
-        async function saveAllPolicies() {
-            if (currentPolicies.length === 0) {
-                alert('No policies to save.');
-                return;
+        // Save policy (handles single or multiple policies)
+        async function savePolicy(policies) {
+            const saveButtons = document.querySelectorAll('.save-policy');
+            const saveAllButton = document.getElementById('save-all-policies');
+            saveButtons.forEach(button => {
+                button.textContent = 'Saving...';
+                button.disabled = true;
+                button.classList.add('opacity-50', 'cursor-not-allowed');
+            });
+            if (saveAllButton) {
+                saveAllButton.textContent = 'Saving...';
+                saveAllButton.disabled = true;
+                saveAllButton.classList.add('opacity-50', 'cursor-not-allowed');
             }
 
             const results = [];
-            for (const policy of currentPolicies) {
-                const result = await savePolicy(policy);
-                results.push(result);
+            for (const policy of Array.isArray(policies) ? policies : [policies]) {
+                try {
+                    console.log('Saving policy:', policy.number);
+                    const res = await fetch('http://localhost:3000/save-policy', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ chatId: selectedChatId, policy })
+                    });
+                    const result = await res.json();
+                    console.log('Save policy response:', { status: res.status, body: result });
+                    if (res.ok && result.success) {
+                        results.push({ policy: policy.number, status: 'success', message: `Saved to ${result.folder}` });
+                    } else {
+                        results.push({ policy: policy.number, status: 'failed', error: result.error || 'Unknown error' });
+                    }
+                } catch (error) {
+                    console.error('Save policy network error:', error);
+                    results.push({ policy: policy.number, status: 'failed', error: 'Network error' });
+                }
             }
 
-            const successMessages = results
-                .filter(r => r.success)
-                .map(r => r.message);
-            const failureMessages = results
-                .filter(r => !r.success)
-                .map(r => r.message);
-
+            // Show alert with successful and failed policies
+            const successPolicies = results.filter(r => r.status === 'success').map(r => r.policy);
+            const failedPolicies = results.filter(r => r.status === 'failed').map(r => `${r.policy} (${r.error})`);
             let alertMessage = '';
-            if (successMessages.length > 0) {
-                alertMessage += 'Saved successfully:\n' + successMessages.join('\n') + '\n';
+            if (successPolicies.length > 0) {
+                alertMessage += `Successfully saved policies: ${successPolicies.join(', ')}\n`;
             }
-            if (failureMessages.length > 0) {
-                alertMessage += 'Already present or failed to save:\n' + failureMessages.join('\n');
+            if (failedPolicies.length > 0) {
+                alertMessage += `Failed to save policies: ${failedPolicies.join(', ')}`;
+            }
+            if (alertMessage) {
+                alert(alertMessage);
+            } else {
+                alert('No policies were processed.');
             }
 
-            alert(alertMessage || 'No policies processed.');
+            // Restore buttons
+            saveButtons.forEach(button => {
+                button.textContent = 'Save Policy';
+                button.disabled = false;
+                button.classList.remove('opacity-50', 'cursor-not-allowed');
+            });
+            if (saveAllButton) {
+                saveAllButton.textContent = 'Save All';
+                saveAllButton.disabled = false;
+                saveAllButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
         }
 
         // Date filter type change
@@ -392,6 +424,11 @@
                     alert('Please enter dates in dd/mm/yy format');
                     return;
                 }
+            } else if (dateFilter === 'all') {
+                // Set start date to epoch (1970-01-01) and end date to today
+                startDate = '01/01/70';
+                const today = new Date();
+                endDate = `${String(today.getDate()).padStart(2, '0')}/${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
             }
 
             try {
@@ -431,13 +468,21 @@
                     messageList.appendChild(policyDiv);
                 });
 
+                // Add event listeners for Save Policy buttons
                 document.querySelectorAll('.save-policy').forEach(button => {
                     button.addEventListener('click', () => {
                         const policy = JSON.parse(button.dataset.policy);
-                        savePolicy(policy).then(result => {
-                            alert(result.message);
-                        });
+                        savePolicy(policy);
                     });
+                });
+
+                // Add event listener for Save All button
+                document.getElementById('save-all-policies').addEventListener('click', () => {
+                    if (currentPolicies.length === 0) {
+                        alert('No policies to save.');
+                        return;
+                    }
+                    savePolicy(currentPolicies);
                 });
 
                 messages.forEach(msg => {
@@ -464,9 +509,6 @@
             document.getElementById('chat-list').classList.remove('hidden');
             console.log('Date filter cancelled');
         });
-
-        // Save all policies button
-        document.getElementById('save-all-policies').addEventListener('click', saveAllPolicies);
 
         // Back to chats
         document.getElementById('back-to-chats').addEventListener('click', () => {
@@ -497,6 +539,9 @@
         // Initialize
         console.log('Page loaded');
         checkSession();
+
+        // Add event listener for Show Chats button
+        document.getElementById('show-chats').addEventListener('click', fetchChats);
     </script>
 </body>
 </html>
