@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Send Saved Policies</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 font-sans">
+    <div class="container mx-auto p-4 max-w-4xl">
+        <h1 class="text-3xl font-bold text-center mb-6">Send Saved Policies</h1>
+
+        <!-- Back to Main Page -->
+        <div class="mb-6">
+            <a href="index.html" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Back to Main Page</a>
+        </div>
+
+        <!-- Date Filter -->
+        <div id="date-filter" class="bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Select Date Filter</h2>
+            <div class="flex flex-col space-y-4">
+                <select id="date-filter-type" class="border rounded px-2 py-1">
+                    <option value="all">All Policies</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="custom">Custom Date Range</option>
+                </select>
+                <div id="custom-date" class="hidden flex space-x-4">
+                    <input id="start-date" type="text" placeholder="dd/mm/yy" class="border rounded px-2 py-1" pattern="\d{2}/\d{2}/\d{2}">
+                    <input id="end-date" type="text" placeholder="dd/mm/yy" class="border rounded px-2 py-1" pattern="\d{2}/\d{2}/\d{2}">
+                </div>
+                <div class="flex space-x-2">
+                    <button id="apply-filter" class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">Apply Filter</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Policy Selection -->
+        <div id="policy-selection" class="hidden bg-white p-6 rounded-lg shadow-md mb-6">
+            <h2 class="text-xl font-semibold mb-4">Select Policies to Send</h2>
+            <div class="mb-4">
+                <label class="flex items-center">
+                    <input type="checkbox" id="select-all" class="mr-2">
+                    <span>Select All</span>
+                </label>
+            </div>
+            <div id="policy-list" class="space-y-2 max-h-64 overflow-y-auto"></div>
+            <div class="mt-4">
+                <input id="recipient-email" type="email" placeholder="Recipient Email" class="border rounded px-2 py-1 w-full mb-2">
+                <button id="send-emails" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Send Emails</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Date filter type change
+        document.getElementById('date-filter-type').addEventListener('change', (e) => {
+            const customDate = document.getElementById('custom-date');
+            if (e.target.value === 'custom') {
+                customDate.classList.remove('hidden');
+            } else {
+                customDate.classList.add('hidden');
+            }
+            console.log('Date filter type changed:', e.target.value);
+        });
+
+        // Select All checkbox
+        document.getElementById('select-all').addEventListener('change', (e) => {
+            const checkboxes = document.querySelectorAll('.policy-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = e.target.checked;
+            });
+            console.log('Select All toggled:', e.target.checked);
+        });
+
+        // Fetch policies based on date filter
+        async function fetchPolicies() {
+            const dateFilter = document.getElementById('date-filter-type').value;
+            let startDate = '', endDate = '';
+            if (dateFilter === 'custom') {
+                startDate = document.getElementById('start-date').value;
+                endDate = document.getElementById('end-date').value;
+                if (!/^\d{2}\/\d{2}\/\d{2}$/.test(startDate) || !/^\d{2}\/\d{2}\/\d{2}$/.test(endDate)) {
+                    alert('Please enter dates in dd/mm/yy format');
+                    return;
+                }
+            }
+
+            try {
+                console.log('Fetching policies:', { dateFilter, startDate, endDate });
+                const res = await fetch('http://localhost:3000/get-policies', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dateFilter, startDate, endDate })
+                });
+                const policies = await res.json();
+                console.log('Policies fetched:', policies);
+                if (policies.error) {
+                    alert(policies.error);
+                    return;
+                }
+
+                const policyList = document.getElementById('policy-list');
+                policyList.innerHTML = '';
+                policies.forEach(policy => {
+                    const div = document.createElement('div');
+                    div.className = 'flex items-center p-2 border rounded';
+                    div.innerHTML = `
+                        <input type="checkbox" class="policy-checkbox mr-2" data-policy='${JSON.stringify(policy)}'>
+                        <span>Policy #${policy.number} (${policy.dateStr})</span>
+                    `;
+                    policyList.appendChild(div);
+                });
+
+                // Reset Select All checkbox
+                document.getElementById('select-all').checked = false;
+
+                document.getElementById('policy-selection').classList.remove('hidden');
+                console.log('Policy selection displayed');
+            } catch (error) {
+                console.error('Fetch policies error:', error);
+                alert('Failed to fetch policies. Please ensure the server is running.');
+            }
+        }
+
+        // Check previously sent policies
+        async function checkSentPolicies(policies, recipientEmail) {
+            try {
+                const res = await fetch('http://localhost:3000/check-sent-policies', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policies, recipientEmail })
+                });
+                const sentPolicies = await res.json();
+                return sentPolicies;
+            } catch (error) {
+                console.error('Error checking sent policies:', error);
+                return [];
+            }
+        }
+
+        // Apply date filter
+        document.getElementById('apply-filter').addEventListener('click', fetchPolicies);
+
+        // Send emails
+        document.getElementById('send-emails').addEventListener('click', async () => {
+            const recipientEmail = document.getElementById('recipient-email').value;
+            if (!recipientEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail)) {
+                alert('Please enter a valid recipient email address');
+                return;
+            }
+
+            const selectedPolicies = [];
+            document.querySelectorAll('.policy-checkbox:checked').forEach(checkbox => {
+                selectedPolicies.push(JSON.parse(checkbox.dataset.policy));
+            });
+
+            if (selectedPolicies.length === 0) {
+                alert('Please select at least one policy to send');
+                return;
+            }
+
+            // Check for previously sent policies
+            const sentPolicies = await checkSentPolicies(selectedPolicies, recipientEmail);
+            if (sentPolicies.length > 0) {
+                const sentPolicyNumbers = sentPolicies.map(p => p.number).join(', ');
+                alert(`The following policies were already sent to ${recipientEmail}: ${sentPolicyNumbers}`);
+            }
+
+            // Disable send button
+            const sendButton = document.getElementById('send-emails');
+            sendButton.textContent = 'Sending...';
+            sendButton.disabled = true;
+            sendButton.classList.add('opacity-50', 'cursor-not-allowed');
+
+            try {
+                console.log('Sending emails:', { policies: selectedPolicies, recipientEmail });
+                const res = await fetch('http://localhost:3000/send-policy-emails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ policies: selectedPolicies, recipientEmail })
+                });
+                const results = await res.json();
+                console.log('Send emails response:', results);
+                if (res.ok) {
+                    const successPolicies = results.results.filter(r => r.status === 'success').map(r => r.policy);
+                    const failedPolicies = results.results.filter(r => r.status === 'failed').map(r => `${r.policy} (${r.error})`);
+                    let alertMessage = '';
+                    if (successPolicies.length > 0) {
+                        alertMessage += `Successfully sent policies: ${successPolicies.join(', ')}\n`;
+                    }
+                    if (failedPolicies.length > 0) {
+                        alertMessage += `Failed to send policies: ${failedPolicies.join(', ')}`;
+                    }
+                    if (alertMessage) {
+                        alert(alertMessage);
+                    } else {
+                        alert('No policies were processed.');
+                    }
+                } else {
+                    alert(`Failed to send emails: ${results.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                console.error('Send emails error:', error);
+                alert('Failed to send emails due to network error. Please ensure the server is running.');
+            } finally {
+                // Re-enable send button
+                sendButton.textContent = 'Send Emails';
+                sendButton.disabled = false;
+                sendButton.classList.remove('opacity-50', 'cursor-not-allowed');
+            }
+        });
+    </script>
+</body>
+</html>
